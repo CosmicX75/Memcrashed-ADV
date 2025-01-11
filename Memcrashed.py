@@ -107,6 +107,8 @@ while True:
                     with open('api.txt', 'w') as file:
                         file.write(SHODAN_API_KEY)
                         print('[~] File written: ./api.txt')
+                    # Reinitialize the Shodan API client with the new key
+                    api = shodan.Shodan(SHODAN_API_KEY)
                     continue
                 else:
                     print('[✘] Exiting...')
