@@ -87,11 +87,20 @@ while True:
             print('[~] Checking Shodan.io API Key...')
             try:
                 total_results = api.search('product:"Memcached" port:11211')['total']
+                print(f'[~] Total bots found: {total_results}')
                 all_matches = []
                 for page in range(1, (total_results // 100) + 2):
-                    results = api.search('product:"Memcached" port:11211', page=page)
-                    all_matches.extend(results['matches'])
-                    time.sleep(RATE_LIMIT_DELAY)  # Avoid rate-limiting
+                    try:
+                        print(f'[~] Fetching page {page}...')
+                        results = api.search('product:"Memcached" port:11211', page=page)
+                        all_matches.extend(results['matches'])
+                        time.sleep(RATE_LIMIT_DELAY)  # Avoid rate-limiting
+                    except shodan.APIError as e:
+                        if "rate limit" in str(e).lower():
+                            print("[✘] Rate-limited by Shodan. Try again later.")
+                            break
+                        else:
+                            print(f"[✘] Shodan API Error on page {page}: {e}")
                 print(f'[~] Total bots retrieved: {len(all_matches)}')
 
                 if input("[*] Save results for later usage? <Y/n>: ").lower().startswith('y'):
