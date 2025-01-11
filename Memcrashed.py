@@ -101,7 +101,16 @@ while True:
                     print('[~] File written: ./bots.txt')
             except shodan.APIError as e:
                 print(f'[✘] Error: {e}')
-                continue
+                option = input('[*] Would you like to change the API Key? <Y/n>: ').lower()
+                if option.startswith('y'):
+                    SHODAN_API_KEY = input('[*] Please enter a valid Shodan.io API Key: ').strip()
+                    with open('api.txt', 'w') as file:
+                        file.write(SHODAN_API_KEY)
+                        print('[~] File written: ./api.txt')
+                    continue
+                else:
+                    print('[✘] Exiting...')
+                    break
 
         if myresults.is_file() and input('[*] Use locally stored Shodan data? <Y/n>: ').lower().startswith('y'):
             with open('bots.txt') as my_file:
